@@ -25,9 +25,10 @@ static volatile int exited = 0;
 const char help_fmt[] =
     "A tool to measure perf events or latency for a specific function using uprobe + eBPF.\n"
     "\n"
-    "Usage: %1$s [-v] [-a] -e <event1,event2,...> <pid> <binary_path> <pattern>\n"
+    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1>,<event2>,... <pid> <binary_path> <pattern>\n"
     "  -v: verbose output\n"
-    "  -a: aggregate event counters for all threads, using <pid> as the thread group\n"
+    "  -t: aggregate event counters for these comma-separated threads ids, or all threads if 'all' "
+    "is supplied\n"
     "  -e: comma-separated list of events to measure\n"
     "\n"
     "Event format: <type>:<config>:<start-stop-step>[:avg|constrained_avg]\n"
@@ -38,7 +39,8 @@ const char help_fmt[] =
     "range)\n"
     "\n"
     "Example:\n"
-    "  %1$s -v -a -e latency:500-1500-100:constrained_avg,hardware:cpu-cycles:10000-200000-10000 "
+    "  %1$s -v -t all -e "
+    "latency:500-1500-100:constrained_avg,hardware:cpu-cycles:10000-200000-10000 "
     "12345 /bin/bash '*readline*'\n";
 
 typedef struct {
@@ -229,11 +231,13 @@ int open_perf_event(uint32_t type, uint64_t config, int pid, int group_fd) {
         .type = type,
         .config = config,
         .inherit = 0,
+        .pinned = 1,
         .size = sizeof(attr),
     };
     int fd = syscall(SYS_perf_event_open, &attr, pid, -1, group_fd, 0);
     if (fd == -1) {
-        perror("Failed to open perf event (type=%u, config=0x%lx) for pid %d");
+        fprintf(stderr, "Failed to open perf event (type=%u, config=0x%lx) for pid %d: %s\n", type,
+                config, pid, strerror(errno));
     }
     return fd;
 }
@@ -430,13 +434,6 @@ int get_threads_in_tgid(int tgid, int **tids, int *num_tids) {
         return -1;
     }
 
-    *tids = malloc(MAX_THREADS * sizeof(int));
-    if (*tids == NULL) {
-        fprintf(stderr, "Failed to allocate memory for tids\n");
-        closedir(dir);
-        return -1;
-    }
-
     struct dirent *entry;
     int count = 0;
     while ((entry = readdir(dir)) != NULL) {
@@ -465,14 +462,14 @@ int get_threads_in_tgid(int tgid, int **tids, int *num_tids) {
 }
 
 int main(int argc, char **argv) {
+    char *tidArg = NULL;
     event_t **events;
     int num_events;
-    bool aggregate = false;
     int opt;
-    while ((opt = getopt(argc, argv, "vahe:")) != -1) {
+    while ((opt = getopt(argc, argv, "vht:e:")) != -1) {
         switch (opt) {
-            case 'a':
-                aggregate = true;
+            case 't':
+                tidArg = optarg;
                 break;
             case 'v':
                 verbose = true;
@@ -507,9 +504,36 @@ int main(int argc, char **argv) {
 
     int num_threads;
     int *tids;
-    if (aggregate) {
-        if (get_threads_in_tgid(pid, &tids, &num_threads) != 0) {
-            return 1;
+    if (tidArg != NULL) {
+        tids = malloc(MAX_THREADS * sizeof(int));
+        if (tids == NULL) {
+            fprintf(stderr, "Failed to allocate memory for tids\n");
+            return -1;
+        }
+
+        if (strcmp(tidArg, "all") == 0) {
+            if (get_threads_in_tgid(pid, &tids, &num_threads) != 0) {
+                return 1;
+            }
+        } else {
+            char *token = strtok(tidArg, ",");
+            tids[0] = pid;
+            int index = 1;
+            while (token != NULL) {
+                int tid = atoi(token);
+                if (tid > 0) {
+                    if (index >= MAX_THREADS) {
+                        fprintf(stderr, "Too many threads specified, max supported is %d\n",
+                                MAX_THREADS);
+                        return -1;
+                    }
+
+                    tids[index] = tid;
+                    index++;
+                    token = strtok(NULL, ",");
+                }
+            }
+            num_threads = index;
         }
     } else {
         num_threads = 1;

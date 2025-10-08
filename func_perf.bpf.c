@@ -63,8 +63,6 @@ int BPF_UPROBE(func_entry) {
         return 0;
     }
 
-    bpf_printk("Function entry");
-
     LOOP_EVENTS(event) {
         struct bpf_perf_event_value start_val;
         u32 key = event;
