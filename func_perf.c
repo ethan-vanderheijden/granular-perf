@@ -6,6 +6,8 @@
 #include <dirent.h>
 #include <libgen.h>
 #include <linux/perf_event.h>
+#include <perfmon/pfmlib.h>
+#include <perfmon/pfmlib_perf_event.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -25,14 +27,15 @@ static volatile int exited = 0;
 const char help_fmt[] =
     "A tool to measure perf events or latency for a specific function using uprobe + eBPF.\n"
     "\n"
-    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1>,<event2>,... <pid> <binary_path> <pattern>\n"
+    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1> -e <event2> -e ... <pid> <binary_path> "
+    "<pattern>\n"
     "  -v: verbose output\n"
     "  -t: aggregate event counters for these comma-separated threads ids, or all threads if 'all' "
     "is supplied\n"
-    "  -e: comma-separated list of events to measure\n"
+    "  -e: event to measure\n"
     "\n"
-    "Event format: <type>:<config>:<start-stop-step>[:avg|constrained_avg]\n"
-    "  where `type` and `config` correspond to the argument attributes of perf_event_open(2),\n"
+    "Event format: <event_string>,<start-stop-step>[,avg|constrained_avg]\n"
+    "  where `event_string` is an event as parsed by libpfm,\n"
     "  latency is a special event that measures function latency,\n"
     "  `start-stop-step` define the histogram range and bucket size, and\n"
     "  `avg` records the average of all event values (can be constrained to values in histogram "
@@ -40,13 +43,12 @@ const char help_fmt[] =
     "\n"
     "Example:\n"
     "  %1$s -v -t all -e "
-    "latency:500-1500-100:constrained_avg,hardware:cpu-cycles:10000-200000-10000 "
+    "latency,500-1500-100,constrained_avg -e perf::cpu-cycles,10000-200000-10000 "
     "12345 /bin/bash '*readline*'\n";
 
 typedef struct {
     char *name;
-    uint32_t type;
-    uint64_t config;
+    struct perf_event_attr perf_event;
     bool latency_event;
     int hist_start;
     int bucket_size;
@@ -60,53 +62,6 @@ static int libbpf_print_fn(enum libbpf_print_level level, const char *format, va
     return vfprintf(stderr, format, args);
 }
 
-void lowercase(char *str) {
-    for (int i = 0; str[i]; i++) {
-        str[i] = tolower(str[i]);
-    }
-}
-
-uint32_t parse_perf_type(char *type_str) {
-    lowercase(type_str);
-    if (strcmp(type_str, "hardware") == 0 || strcmp(type_str, "hw") == 0) {
-        return PERF_TYPE_HARDWARE;
-    } /*else if (strcmp(type_str, "raw") == 0) {
-        return PERF_TYPE_RAW;
-    }*/
-    else {
-        fprintf(stderr, "Unsupported event type: %s\n", type_str);
-        return -1;
-    }
-}
-
-uint64_t parse_perf_hw_config(char *config_str) {
-    lowercase(config_str);
-    if (strcmp(config_str, "cpu-cycles") == 0) {
-        return PERF_COUNT_HW_CPU_CYCLES;
-    } else if (strcmp(config_str, "instructions") == 0) {
-        return PERF_COUNT_HW_INSTRUCTIONS;
-    } else if (strcmp(config_str, "cache-references") == 0) {
-        return PERF_COUNT_HW_CACHE_REFERENCES;
-    } else if (strcmp(config_str, "cache-misses") == 0) {
-        return PERF_COUNT_HW_CACHE_MISSES;
-    } else if (strcmp(config_str, "branch-instructions") == 0) {
-        return PERF_COUNT_HW_BRANCH_INSTRUCTIONS;
-    } else if (strcmp(config_str, "branch-misses") == 0) {
-        return PERF_COUNT_HW_BRANCH_MISSES;
-    } else if (strcmp(config_str, "bus-cycles") == 0) {
-        return PERF_COUNT_HW_BUS_CYCLES;
-    } else if (strcmp(config_str, "stalled-cycles-frontend") == 0) {
-        return PERF_COUNT_HW_STALLED_CYCLES_FRONTEND;
-    } else if (strcmp(config_str, "stalled-cycles-backend") == 0) {
-        return PERF_COUNT_HW_STALLED_CYCLES_BACKEND;
-    } else if (strcmp(config_str, "ref-cpu-cycles") == 0) {
-        return PERF_COUNT_HW_REF_CPU_CYCLES;
-    } else {
-        fprintf(stderr, "Unsupported hardware config: %s\n", config_str);
-        return -1;
-    }
-}
-
 event_t *parse_single_event(char *event_str) {
     event_t *event = calloc(1, sizeof(event_t));
     if (event == NULL) {
@@ -114,36 +69,33 @@ event_t *parse_single_event(char *event_str) {
         return NULL;
     }
 
-    char *saved;
-    char *token = strtok_r(event_str, ":", &saved);
-    // 0 = parsing type, 1 = parsing config, 2 = parsing hist params, 3 = parsing avg, 4 = done
+    char *token = strtok(event_str, ",");
+    // 0 = parsing event string, 1 = parsing hist params, 2 = parsing avg, 3 = done
     int state = 0;
     while (token != NULL) {
         switch (state) {
             case 0:
-                if (strcmp(token, "latency") == 0) {
+                if (strcasecmp(token, "latency") == 0) {
                     event->latency_event = true;
                     event->name = "latency";
-                    state = 2;
                 } else {
-                    event->type = parse_perf_type(token);
-                    if (event->type == (uint32_t)-1) {
-                        goto err;
-                    }
-                    state = 1;
-                }
-                break;
-            case 1:
-                if (event->type == PERF_TYPE_HARDWARE) {
-                    event->config = parse_perf_hw_config(token);
-                    if (event->config == (uint64_t)-1) {
-                        goto err;
-                    }
+                    event->latency_event = false;
                     event->name = token;
-                    state = 2;
+
+                    pfm_perf_encode_arg_t args;
+                    memset(&args, 0, sizeof(args));
+                    args.attr = &event->perf_event;
+                    args.size = sizeof(args);
+                    pfm_err_t ret = pfm_get_os_event_encoding(token, PFM_PLM0 | PFM_PLM3, PFM_OS_PERF_EVENT, &args);
+                    if (ret != PFM_SUCCESS) {
+                        fprintf(stderr, "Failed to parse event string '%s': %s\n", token,
+                                pfm_strerror(ret));
+                        goto err;
+                    }
                 }
+                state = 1;
                 break;
-            case 2: {
+            case 1: {
                 int hist_end;
                 if (sscanf(token, "%d-%d-%d", &event->hist_start, &hist_end, &event->bucket_size) !=
                     3) {
@@ -152,18 +104,17 @@ event_t *parse_single_event(char *event_str) {
                 }
                 event->num_buckets = 2 + (hist_end - event->hist_start + event->bucket_size - 1) /
                                              event->bucket_size;
-                state = 3;
+                state = 2;
                 break;
             }
-            case 3:
-                lowercase(token);
-                if (strcmp(token, "avg") == 0) {
+            case 2:
+                if (strcasecmp(token, "avg") == 0) {
                     event->avg = true;
-                    state = 4;
-                } else if (strcmp(token, "constrained_avg") == 0) {
+                    state = 3;
+                } else if (strcasecmp(token, "constrained_avg") == 0) {
                     event->avg = true;
                     event->constrain_avg = true;
-                    state = 4;
+                    state = 3;
                 } else {
                     fprintf(stderr, "Unsupported avg option: %s\n", token);
                     goto err;
@@ -174,10 +125,10 @@ event_t *parse_single_event(char *event_str) {
                 goto err;
         }
 
-        token = strtok_r(NULL, ":", &saved);
+        token = strtok(NULL, ",");
     }
 
-    if (state < 3) {
+    if (state < 2) {
         fprintf(stderr, "Incomplete event specification.\n");
         goto err;
     }
@@ -189,55 +140,19 @@ err:
     return NULL;
 }
 
-event_t **parse_events(char *event_str, int *num_events) {
-    event_t **events = calloc(MAX_EVENTS, sizeof(event_t *));
-    if (events == NULL) {
-        fprintf(stderr, "Failed to allocate memory for events array\n");
-        return NULL;
-    }
-
-    char *saved;
-    char *token = strtok_r(event_str, ",", &saved);
-    int index = 0;
-    while (token != NULL) {
-        if (index >= MAX_EVENTS) {
-            fprintf(stderr, "We only support up to %d events\n", MAX_EVENTS);
-            goto err;
-        }
-
-        event_t *event = parse_single_event(token);
-        if (event == NULL) {
-            fprintf(stderr, "Failed to parse event %d\n", index + 1);
-            goto err;
-        }
-        events[index++] = event;
-
-        token = strtok_r(NULL, ",", &saved);
-    }
-    *num_events = index;
-
-    return events;
-
-err:
-    for (int i = 0; i < index; i++) {
-        free(events[i]);
-    }
-    free(events);
-    return NULL;
-}
-
-int open_perf_event(uint32_t type, uint64_t config, int pid, int group_fd) {
-    struct perf_event_attr attr = {
-        .type = type,
-        .config = config,
-        .inherit = 0,
-        .pinned = 1,
-        .size = sizeof(attr),
-    };
+int open_perf_event(struct perf_event_attr template, int pid, int group_fd) {
+    struct perf_event_attr attr;
+    memcpy(&attr, &template, sizeof(attr));
+    attr.inherit = 0;
+    attr.size = sizeof(attr);
+    attr.sample_freq = 0;
+    attr.sample_period = 0;
+    attr.sample_type = 0;
+    attr.read_format = 0;
     int fd = syscall(SYS_perf_event_open, &attr, pid, -1, group_fd, 0);
     if (fd == -1) {
-        fprintf(stderr, "Failed to open perf event (type=%u, config=0x%lx) for pid %d: %s\n", type,
-                config, pid, strerror(errno));
+        fprintf(stderr, "Failed to open perf event (type=%u, config=0x%llx) for pid %d: %s\n",
+                attr.type, attr.config, pid, strerror(errno));
     }
     return fd;
 }
@@ -357,6 +272,9 @@ int attach_to_thread(int tgid, int pid, struct func_perf_bpf **skel_ptr, char *p
         // maps must have at least 1 entry or it fails to load
         num_perf_events = 1;
     }
+    if (events_with_avg == 0) {
+        events_with_avg = 1;
+    }
 
     bpf_map__set_max_entries(skel->maps.hist_params, num_events);
     bpf_map__set_max_entries(skel->maps.perf_events, num_perf_events);
@@ -384,7 +302,7 @@ int attach_to_thread(int tgid, int pid, struct func_perf_bpf **skel_ptr, char *p
             goto err;
         }
         if (!event->latency_event) {
-            int fd = open_perf_event(event->type, event->config, pid, group_fd);
+            int fd = open_perf_event(event->perf_event, pid, group_fd);
             if (fd == -1) {
                 goto err;
             }
@@ -462,9 +380,15 @@ int get_threads_in_tgid(int tgid, int **tids, int *num_tids) {
 }
 
 int main(int argc, char **argv) {
+    pfm_err_t ret = pfm_initialize();
+    if (ret != PFM_SUCCESS) {
+        fprintf(stderr, "Failed to initialize libpfm: %s\n", pfm_strerror(ret));
+        return 1;
+    }
+
     char *tidArg = NULL;
-    event_t **events;
-    int num_events;
+    event_t **events = calloc(MAX_EVENTS, sizeof(event_t *));
+    int num_events = 0;
     int opt;
     while ((opt = getopt(argc, argv, "vht:e:")) != -1) {
         switch (opt) {
@@ -475,7 +399,15 @@ int main(int argc, char **argv) {
                 verbose = true;
                 break;
             case 'e':
-                events = parse_events(optarg, &num_events);
+                if (num_events >= MAX_EVENTS) {
+                    fprintf(stderr, "We only support up to %d events\n", MAX_EVENTS);
+                    return 1;
+                }
+                events[num_events] = parse_single_event(optarg);
+                if (events[num_events] == NULL) {
+                    return 1;
+                }
+                num_events++;
                 if (events != NULL) {
                     break;
                 }

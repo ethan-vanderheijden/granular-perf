@@ -68,8 +68,6 @@ int BPF_UPROBE(func_entry) {
         u32 key = event;
         long err = bpf_perf_event_read_value(&perf_events, key, &start_val, sizeof(start_val));
         if (!err) {
-            bpf_printk("Start value: counter=%llu, enabled=%llu, running=%llu", start_val.counter,
-                       start_val.enabled, start_val.running);
             bpf_map_update_elem(&counter_starts, &key, &start_val, BPF_ANY);
         } else {
             bpf_printk("Error reading perf event %d: %ld", event, err);
@@ -132,8 +130,6 @@ int BPF_URETPROBE(func_exit) {
         if (params) {
             long err = bpf_perf_event_read_value(&perf_events, key, &end_val, sizeof(end_val));
             if (!err) {
-                bpf_printk("End value: counter=%llu, enabled=%llu, running=%llu", end_val.counter,
-                        end_val.enabled, end_val.running);
                 struct bpf_perf_event_value *start_val = bpf_map_lookup_elem(&counter_starts, &key);
                 if (start_val) {
                     u64 t_enabled = end_val.enabled - start_val->enabled;

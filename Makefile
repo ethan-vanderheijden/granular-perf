@@ -3,7 +3,7 @@
 BUILD_DIR = build
 TARGET := func_perf
 
-all: $(BUILD_DIR)/$(TARGET).bpf.o $(BUILD_DIR)/$(TARGET).bpf.skel.h $(BUILD_DIR)/$(TARGET)
+all: $(BUILD_DIR)/$(TARGET).bpf.o $(BUILD_DIR)/$(TARGET).bpf.skel.h $(BUILD_DIR)/$(TARGET) showevtinfo
 
 $(BUILD_DIR)/vmlinux.h:
 	@mkdir -p $(BUILD_DIR)
@@ -19,7 +19,10 @@ $(BUILD_DIR)/%.bpf.skel.h: $(BUILD_DIR)/%.bpf.o
 
 $(BUILD_DIR)/%: %.c $(BUILD_DIR)/%.bpf.skel.h
 	@mkdir -p $(BUILD_DIR)
-	clang -Wall -O2 -g -I$(BUILD_DIR) -o $@ $< -lbpf
+	clang -Wall -O2 -g -I$(BUILD_DIR) -o $@ $< -lbpf -lpfm
+
+showevtinfo: showevtinfo.c
+	clang -Wall -O2 -g -o $(BUILD_DIR)/$@ $< -lpfm
 
 clean:
 	rm -rf $(BUILD_DIR)
