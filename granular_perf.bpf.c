@@ -1,6 +1,6 @@
 #include "vmlinux.h"
 
-#include "func_perf.h"
+#include "granular_perf.h"
 
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>

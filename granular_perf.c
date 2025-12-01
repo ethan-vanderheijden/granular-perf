@@ -1,4 +1,4 @@
-#include "func_perf.h"
+#include "granular_perf.h"
 
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
@@ -17,7 +17,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 
-#include "func_perf.bpf.skel.h"
+#include "granular_perf.bpf.skel.h"
 
 #define MAX_THREADS 64
 
@@ -157,7 +157,7 @@ int open_perf_event(struct perf_event_attr template, int pid, int group_fd) {
     return fd;
 }
 
-uint64_t sum_buckets(struct func_perf_bpf **skels, int num_skels, int index) {
+uint64_t sum_buckets(struct granular_perf_bpf **skels, int num_skels, int index) {
     uint64_t total = 0;
     for (int i = 0; i < num_skels; i++) {
         uint64_t count = 0;
@@ -179,7 +179,7 @@ int letters_in_num(int num) {
     return count;
 }
 
-void print_histogram(struct func_perf_bpf **skels, int num_skels, event_t *event, int hist_offset) {
+void print_histogram(struct granular_perf_bpf **skels, int num_skels, event_t *event, int hist_offset) {
     uint64_t max_value = 0;
     for (int i = 0; i < event->num_buckets; i++) {
         uint32_t bucket = hist_offset + i;
@@ -216,7 +216,7 @@ void print_histogram(struct func_perf_bpf **skels, int num_skels, event_t *event
     }
 }
 
-void print_avg(struct func_perf_bpf **skels, int num_skels, int avg_index) {
+void print_avg(struct granular_perf_bpf **skels, int num_skels, int avg_index) {
     running_avg_t avg = {
         .sum = 0,
         .count = 0,
@@ -241,11 +241,11 @@ static void sigint_handler(int _) { exited = 1; }
 
 // the eBPF program is attached to the parent process (tgid) but will filter function calls
 // based on the thread's pid
-int attach_to_thread(int tgid, int pid, struct func_perf_bpf **skel_ptr, char *path, char *pattern,
+int attach_to_thread(int tgid, int pid, struct granular_perf_bpf **skel_ptr, char *path, char *pattern,
                      event_t **events, int num_events) {
     LIBBPF_OPTS(bpf_uprobe_multi_opts, uprobe_multi_opts);
 
-    struct func_perf_bpf *skel = func_perf_bpf__open();
+    struct granular_perf_bpf *skel = granular_perf_bpf__open();
     *skel_ptr = skel;
     bpf_program__set_expected_attach_type(skel->progs.func_entry, BPF_TRACE_UPROBE_MULTI);
     bpf_program__set_expected_attach_type(skel->progs.func_exit, BPF_TRACE_UPROBE_MULTI);
@@ -282,7 +282,7 @@ int attach_to_thread(int tgid, int pid, struct func_perf_bpf **skel_ptr, char *p
     bpf_map__set_max_entries(skel->maps.multi_hist, total_buckets);
     bpf_map__set_max_entries(skel->maps.avgs, events_with_avg);
 
-    if (func_perf_bpf__load(skel) != 0) {
+    if (granular_perf_bpf__load(skel) != 0) {
         fprintf(stderr, "Failed to load and verify BPF skeleton\n");
         return 1;
     }
@@ -339,7 +339,7 @@ int attach_to_thread(int tgid, int pid, struct func_perf_bpf **skel_ptr, char *p
     return 0;
 
 err:
-    func_perf_bpf__destroy(skel);
+    granular_perf_bpf__destroy(skel);
     return 1;
 }
 
@@ -473,13 +473,13 @@ int main(int argc, char **argv) {
         tids[0] = pid;
     }
 
-    struct func_perf_bpf **skels = calloc(num_threads, sizeof(struct func_perf_bpf *));
+    struct granular_perf_bpf **skels = calloc(num_threads, sizeof(struct granular_perf_bpf *));
     for (int i = 0; i < num_threads; i++) {
-        skels[i] = malloc(sizeof(struct func_perf_bpf));
-        memset(skels[i], 0, sizeof(struct func_perf_bpf));
+        skels[i] = malloc(sizeof(struct granular_perf_bpf));
+        memset(skels[i], 0, sizeof(struct granular_perf_bpf));
         if (attach_to_thread(pid, tids[i], &skels[i], path, pattern, events, num_events) != 0) {
             for (int j = 0; j < i; j++) {
-                func_perf_bpf__destroy(skels[j]);
+                granular_perf_bpf__destroy(skels[j]);
             }
             return 1;
         }
@@ -517,7 +517,7 @@ int main(int argc, char **argv) {
     }
 
     for (int i = 0; i < num_threads; i++) {
-        func_perf_bpf__destroy(skels[i]);
+        granular_perf_bpf__destroy(skels[i]);
     }
 
     return 0;

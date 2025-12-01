@@ -1,5 +1,5 @@
-#ifndef FUNC_PERF_H
-#define FUNC_PERF_H
+#ifndef granular_perf_H
+#define granular_perf_H
 
 // includes latency measurement
 #define MAX_EVENTS 16

@@ -1,7 +1,7 @@
 # compile ebpf program
 
 BUILD_DIR = build
-TARGET := func_perf
+TARGET := granular_perf
 
 all: $(BUILD_DIR)/$(TARGET).bpf.o $(BUILD_DIR)/$(TARGET).bpf.skel.h $(BUILD_DIR)/$(TARGET) showevtinfo
 
