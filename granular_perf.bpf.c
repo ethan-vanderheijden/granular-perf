@@ -23,6 +23,7 @@ struct {
     __type(value, hist_params_t);
     // max_entries is set in userspace by libbpf, equal to num_perf_events + 1 (if
     // `instrument_latency`)
+    // last entry is reserved for latency histogram (if enabled)
 } hist_params SEC(".maps");
 
 struct {
@@ -55,6 +56,7 @@ struct {
     __type(key, u32);
     __type(value, running_avg_t);
     // max_entries is set in userspace by libbpf (<= num_perf_events + 1)
+    // last entry is reserved for latency average (if enabled)
 } avgs SEC(".maps");
 
 SEC("uprobe")

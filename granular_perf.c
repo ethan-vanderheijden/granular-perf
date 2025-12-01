@@ -176,6 +176,9 @@ int letters_in_num(int num) {
         num /= 10;
         count++;
     }
+    if (count < 3) {
+        count = 3;
+    }
     return count;
 }
 
@@ -389,6 +392,7 @@ int main(int argc, char **argv) {
     char *tidArg = NULL;
     event_t **events = calloc(MAX_EVENTS, sizeof(event_t *));
     int num_events = 0;
+    bool instrumenting_latency = false;
     int opt;
     while ((opt = getopt(argc, argv, "vht:e:")) != -1) {
         switch (opt) {
@@ -407,6 +411,14 @@ int main(int argc, char **argv) {
                 if (events[num_events] == NULL) {
                     return 1;
                 }
+                if (events[num_events]->latency_event) {
+                    if (instrumenting_latency) {
+                        fprintf(stderr, "Only one latency event can be specified\n");
+                        return 1;
+                    } else {
+                        instrumenting_latency = true;
+                    }
+                }
                 num_events++;
                 if (events != NULL) {
                     break;
@@ -414,6 +426,16 @@ int main(int argc, char **argv) {
             default:
                 fprintf(stderr, help_fmt, basename(argv[0]));
                 return opt != 'h';
+        }
+    }
+
+    // BPF program expects latency event to be the last event
+    for(int i = 0; i < num_events - 1; i++) {
+        event_t *event = events[i];
+        if (event->latency_event) {
+            events[i] = events[num_events - 1];
+            events[num_events - 1] = event;
+            break;
         }
     }
 
@@ -498,14 +520,14 @@ int main(int argc, char **argv) {
         skels[i]->links.func_exit = NULL;
     }
 
-    printf("\n\n");
+    printf("\n");
 
     int hist_offset = 0;
     int avg_index = 0;
     for (int i = 0; i < num_events; i++) {
         event_t *event = events[i];
 
-        printf("Event: %s\n", event->name);
+        printf("\nEvent: %s\n", event->name);
         printf("=========================================\n");
         print_histogram(skels, num_threads, event, hist_offset);
         hist_offset += event->num_buckets;
