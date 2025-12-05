@@ -27,11 +27,11 @@ static volatile int exited = 0;
 const char help_fmt[] =
     "A tool to measure perf events or latency for a specific function using uprobe + eBPF.\n"
     "\n"
-    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1> -e <event2> -e ... <pid> <binary_path> "
-    "<pattern>\n"
+    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1> -e <event2> -e ... <pid> <pattern>\n"
     "  -v: verbose output\n"
     "  -t: aggregate event counters for these comma-separated threads ids, or all threads if 'all' "
     "is supplied\n"
+    "  -b: path to binary (detected based on PID if not supplied)\n"
     "  -e: event to measure\n"
     "\n"
     "Event format: <event_string>,<start-stop-step>[,avg|constrained_avg]\n"
@@ -44,7 +44,7 @@ const char help_fmt[] =
     "Example:\n"
     "  %1$s -v -t all -e "
     "latency,500-1500-100,constrained_avg -e perf::cpu-cycles,10000-200000-10000 "
-    "12345 /bin/bash '*readline*'\n";
+    "-b /bin/bash 12345 '*readline*'\n";
 
 typedef struct {
     char *name;
@@ -393,14 +393,18 @@ int main(int argc, char **argv) {
     event_t **events = calloc(MAX_EVENTS, sizeof(event_t *));
     int num_events = 0;
     bool instrumenting_latency = false;
+    char *binary = NULL;
     int opt;
-    while ((opt = getopt(argc, argv, "vht:e:")) != -1) {
+    while ((opt = getopt(argc, argv, "vb:ht:e:")) != -1) {
         switch (opt) {
             case 't':
                 tidArg = optarg;
                 break;
             case 'v':
                 verbose = true;
+                break;
+            case 'b':
+                binary = optarg;
                 break;
             case 'e':
                 if (num_events >= MAX_EVENTS) {
@@ -440,15 +444,23 @@ int main(int argc, char **argv) {
     }
 
     pid_t pid;
-    char *path;
     char *pattern;
-    if (optind + 3 != argc) {
+    if (optind + 2 != argc) {
         fprintf(stderr, help_fmt, basename(argv[0]));
         return 1;
     } else {
         pid = atoi(argv[optind]);
-        path = argv[optind + 1];
-        pattern = argv[optind + 2];
+        pattern = argv[optind + 1];
+    }
+
+    if (binary == NULL) {
+        char proc_path[128];
+        snprintf(proc_path, sizeof(proc_path), "/proc/%d/exe", pid);
+        binary = realpath(proc_path, NULL);
+        if (binary == NULL) {
+            fprintf(stderr, "Failed to resolve binary path for pid %d: %s\n", pid, strerror(errno));
+            return -1;
+        }
     }
 
     signal(SIGINT, sigint_handler);
@@ -499,7 +511,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < num_threads; i++) {
         skels[i] = malloc(sizeof(struct granular_perf_bpf));
         memset(skels[i], 0, sizeof(struct granular_perf_bpf));
-        if (attach_to_thread(pid, tids[i], &skels[i], path, pattern, events, num_events) != 0) {
+        if (attach_to_thread(pid, tids[i], &skels[i], binary, pattern, events, num_events) != 0) {
             for (int j = 0; j < i; j++) {
                 granular_perf_bpf__destroy(skels[j]);
             }
