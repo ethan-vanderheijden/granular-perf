@@ -27,11 +27,12 @@ static volatile int exited = 0;
 const char help_fmt[] =
     "A tool to measure perf events or latency for a specific function using uprobe + eBPF.\n"
     "\n"
-    "Usage: %1$s [-v] [-t <tid1>,...] -e <event1> -e <event2> -e ... <pid> <pattern>\n"
+    "Usage: %1$s [-v] [-t <tid1>,...] [-b <binary>] [-c <collection time>] -e <event1> -e <event2> -e ... <pid> <pattern>\n"
     "  -v: verbose output\n"
     "  -t: aggregate event counters for these comma-separated threads ids, or all threads if 'all' "
     "is supplied\n"
     "  -b: path to binary (detected based on PID if not supplied)\n"
+    "  -c: how many seconds to collect data for, 0 means collect forever (default: 0)\n"
     "  -e: event to measure\n"
     "\n"
     "Event format: <event_string>,<start-stop-step>[,avg|constrained_avg]\n"
@@ -394,8 +395,9 @@ int main(int argc, char **argv) {
     int num_events = 0;
     bool instrumenting_latency = false;
     char *binary = NULL;
+    int collection_time = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "vb:ht:e:")) != -1) {
+    while ((opt = getopt(argc, argv, "vb:c:ht:e:")) != -1) {
         switch (opt) {
             case 't':
                 tidArg = optarg;
@@ -405,6 +407,13 @@ int main(int argc, char **argv) {
                 break;
             case 'b':
                 binary = optarg;
+                break;
+            case 'c':
+                collection_time = atoi(optarg);
+                if (collection_time < 0) {
+                    fprintf(stderr, "Collection time must be non-negative\n");
+                    return 1;
+                }
                 break;
             case 'e':
                 if (num_events >= MAX_EVENTS) {
@@ -520,6 +529,11 @@ int main(int argc, char **argv) {
     }
 
     printf("Now tracing... Ctrl-C to end.\n");
+
+    if (collection_time > 0) {
+        signal(SIGALRM, sigint_handler);
+        alarm(collection_time);
+    }
 
     while (!exited) {
         pause();
