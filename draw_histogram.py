@@ -7,7 +7,7 @@ import fileinput
 fig_index = 1
 
 
-def draw_histogram(buckets, data, title, subtitle=None):
+def draw_histogram(buckets, data, title, subtitles=[]):
     global fig_index
     fig = plt.figure(fig_index)
     fig_index += 1
@@ -27,21 +27,16 @@ def draw_histogram(buckets, data, title, subtitle=None):
     plot.set_ylabel("Probability")
     plot.set_xlabel("Count")
     pad = 10
-    if subtitle:
-        pad = 30
-    plot.set_title(title, pad=pad, fontsize=14)
-    if subtitle:
-        left_lim, right_lim = plot.get_xlim()
-        _, top_lim = plot.get_ylim()
-        plot.text(
-            left_lim + (right_lim - left_lim) / 2,
-            top_lim,
-            subtitle + "\n\n",
-            horizontalalignment="center",
-            verticalalignment="center",
-            fontsize=12,
-            color=(0.5, 0.5, 0.5),
-        )
+    if subtitles:
+        pad += 15 * len(subtitles)
+    plt.suptitle(title, fontsize=15)
+
+    if subtitles:
+        subtitle = ""
+        for s in subtitles:
+            subtitle += "\n" + s
+
+        plot.set_title(subtitle, pad=8, fontsize=12, color=(0.6, 0.6, 0.6))
 
     fig.show()
 
@@ -50,22 +45,26 @@ if __name__ == "__main__":
     buckets = []
     data = []
     title = None
-    subtitle = None
-    # 0 = reading title, 1 = reading first bar, 2 = reading bars, 3 = reading subtitle
+    avg_line = None
+    stddev_line = None
+    # 0 = reading title, 1 = reading first bar, 2 = reading bars, 3 = reading avg, 4 = reading std dev
     # bars are in the format "[25500, 25600) | 15253 : *********************"
     state = 0
     for line in fileinput.input():
         line = line.strip()
 
-        # subtitle might be empty
         if state == 3:
-            subtitle = line
+            avg_line = line
+            state = 4
+        elif state == 4:
+            stddev_line = line
             state = 0
-            draw_histogram(buckets, data, title, subtitle)
+            draw_histogram(buckets, data, title, [avg_line, stddev_line])
             buckets = []
             data = []
             title = None
-            subtitle = None
+            avg_line = None
+            stddev_line = None
             continue
 
         if not line:
