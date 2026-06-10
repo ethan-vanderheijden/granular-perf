@@ -106,6 +106,7 @@ void process_datapoint(hist_params_t *params, u64 value, u32 hist_offset, u32 hi
                  value <= (params->hist_start + params->bucket_size * (params->num_buckets - 2)))) {
                 __sync_fetch_and_add(&avg->sum, value);
                 __sync_fetch_and_add(&avg->count, 1);
+                __sync_fetch_and_add(&avg->sum_of_squares, value * value);
             }
         }
     }

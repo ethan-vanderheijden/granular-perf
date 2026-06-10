@@ -19,7 +19,7 @@ $(BUILD_DIR)/%.bpf.skel.h: $(BUILD_DIR)/%.bpf.o
 
 $(BUILD_DIR)/%: %.c $(BUILD_DIR)/%.bpf.skel.h
 	@mkdir -p $(BUILD_DIR)
-	clang -Wall -O2 -g -I$(BUILD_DIR) -o $@ $< -lbpf -lpfm
+	clang -Wall -O2 -g -lm -I$(BUILD_DIR) -o $@ $< -lbpf -lpfm
 
 showevtinfo: showevtinfo.c
 	clang -Wall -O2 -g -o $(BUILD_DIR)/$@ $< -lpfm

@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <libgen.h>
 #include <linux/perf_event.h>
+#include <math.h>
 #include <perfmon/pfmlib.h>
 #include <perfmon/pfmlib_perf_event.h>
 #include <signal.h>
@@ -39,8 +40,7 @@ const char help_fmt[] =
     "  where `event_string` is an event as parsed by libpfm,\n"
     "  latency is a special event that measures function latency,\n"
     "  `start-stop-step` define the histogram range and bucket size, and\n"
-    "  `avg` records the average of all event values (can be constrained to values in histogram "
-    "range)\n"
+    "  `avg` records the average/std dev of all event values (can be constrained to values in histogram range)\n"
     "\n"
     "Example:\n"
     "  %1$s -v -t all -e "
@@ -224,6 +224,7 @@ void print_avg(struct granular_perf_bpf **skels, int num_skels, int avg_index) {
     running_avg_t avg = {
         .sum = 0,
         .count = 0,
+        .sum_of_squares = 0,
     };
     for (int i = 0; i < num_skels; i++) {
         running_avg_t tmp;
@@ -233,11 +234,15 @@ void print_avg(struct granular_perf_bpf **skels, int num_skels, int avg_index) {
         }
         avg.sum += tmp.sum;
         avg.count += tmp.count;
+        avg.sum_of_squares += tmp.sum_of_squares;
     }
     if (avg.count == 0) {
         printf("Avg: N/A (no samples)\n");
     } else {
         printf("Avg: %.3f (count: %llu)\n", ((double)avg.sum) / avg.count, avg.count);
+        unsigned long long sum_squared = avg.sum * avg.sum;
+        double variance = (avg.sum_of_squares - sum_squared / ((double) avg.count)) / (avg.count - 1);
+        printf("Std Dev: %.3f\n", sqrt(variance));
     }
 }
 

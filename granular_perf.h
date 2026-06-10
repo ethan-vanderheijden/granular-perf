@@ -15,6 +15,7 @@ typedef struct {
 typedef struct {
     unsigned long long sum;
     unsigned long long count;
+    unsigned __int128 sum_of_squares;
 } running_avg_t;
 
 #endif
